@@ -1,0 +1,22 @@
+# Recursividad total para directorios de entorno y caché
+**/.venv/
+**/venv/
+**/__pycache__/
+**/.uv/
+**/.python-version
+**/.uvlock
+# Binarios y objetos en cualquier profundidad
+**/csv_parser
+**/parser
+**/*.o
+**/*.out
+
+
+# Metadatos del sistema
+**/.DS_Store
+Thumbs.db
+
+# Temporales de benchmarking
+/tmp/bench_out
+/tmp/bench_stats
+
