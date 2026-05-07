@@ -1,0 +1,1017 @@
+openapi: 3.0.3
+info:
+  title: Quiniela Mundial 2026
+  description: |
+    API REST para la aplicación de Quiniela del Mundial Norteamérica 2026.
+
+    **Reglas de negocio clave:**
+    - Las predicciones se cierran 15 minutos antes del `start_time` del partido (estado `Locked`).
+    - Las predicciones de otros usuarios no son visibles hasta que el partido esté `Locked` o `Finished`.
+    - Puntuación: +3 por tendencia (1X2) correcta, +2 de bono por marcador exacto (total 5 pts).
+    - Las bonus questions se bloquean al inicio del partido inaugural del torneo.
+
+    **Time Travel:** Todos los endpoints que dependen del tiempo aceptan `simulated_time` (ISO 8601)
+    para facilitar pruebas E2E. Requiere `ENABLE_TIME_TRAVEL=True` en el backend.
+  version: 1.0.0
+  contact:
+    name: Quiniela Dev Team
+
+servers:
+  - url: http://localhost:8000
+    description: Desarrollo local
+
+tags:
+  - name: auth
+    description: Registro e inicio de sesión
+  - name: users
+    description: Perfil del usuario y tabla de posiciones
+  - name: matches
+    description: Partidos del torneo
+  - name: predictions
+    description: Predicciones de resultados
+  - name: bonus
+    description: Preguntas bonus (Campeón / Bota de Oro)
+  - name: admin
+    description: Operaciones exclusivas de administrador
+
+paths:
+
+  /health:
+    get:
+      summary: Health check
+      operationId: health
+      responses:
+        '200':
+          description: Servicio activo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  # ── Auth ──────────────────────────────────────────────────────────────────
+
+  /auth/register:
+    post:
+      summary: Registrar nuevo usuario
+      operationId: register
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRegister'
+      responses:
+        '201':
+          description: Usuario creado (estado inicial Pending — requiere aprobación de Admin)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserCreated'
+        '400':
+          description: Username ya registrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+              example:
+                detail: Username already registered
+
+  /auth/login:
+    post:
+      summary: Iniciar sesión y obtener JWT
+      operationId: login
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserLogin'
+      responses:
+        '200':
+          description: Token JWT emitido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          description: Credenciales incorrectas o cuenta no activa
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+
+  # ── Users ─────────────────────────────────────────────────────────────────
+
+  /users/me:
+    get:
+      summary: Perfil del usuario autenticado
+      operationId: getMe
+      tags: [users]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Datos del usuario con su posición en el ranking
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserMe'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /users/ranking:
+    get:
+      summary: Tabla de posiciones global
+      operationId: getRanking
+      tags: [users]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Lista ordenada por `total_points DESC, exact_scores DESC, username ASC`
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RankingEntry'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ── Matches ───────────────────────────────────────────────────────────────
+
+  /matches:
+    get:
+      summary: Listar partidos
+      operationId: listMatches
+      tags: [matches]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: phase
+          in: query
+          description: "Filtrar por fase: Groups | R32 | R16 | QF | SF | ThirdPlace | Final"
+          schema:
+            type: string
+            enum: [Groups, R32, R16, QF, SF, ThirdPlace, Final]
+        - name: group_name
+          in: query
+          description: "Filtrar por grupo (A–L, solo aplica en phase=Groups)"
+          schema:
+            type: string
+        - name: simulated_time
+          in: query
+          description: "Time Travel — ISO 8601 (requiere ENABLE_TIME_TRAVEL=True en backend)"
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Lista de partidos ordenada por `start_time ASC`. El campo `status` es calculado en runtime.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MatchOut'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /matches/{match_id}:
+    get:
+      summary: Detalle de un partido
+      operationId: getMatch
+      tags: [matches]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: match_id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: simulated_time
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Partido con predicción del usuario autenticado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchOut'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ── Predictions ───────────────────────────────────────────────────────────
+
+  /predictions:
+    post:
+      summary: Crear o actualizar predicción (upsert)
+      description: |
+        Crea una predicción nueva o actualiza la existente para el par `user_id + match_id`.
+        Solo disponible cuando el partido está en estado `Open` (más de 15 min antes del pitazo).
+      operationId: upsertPrediction
+      tags: [predictions]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PredictionCreate'
+      responses:
+        '200':
+          description: Predicción creada o actualizada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PredictionOut'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Partido cerrado (Locked o Finished)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+              example:
+                detail: Match is locked. Predictions closed.
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /predictions/match/{match_id}:
+    get:
+      summary: Ver predicciones de todos los usuarios para un partido
+      description: |
+        Solo accesible cuando el partido está en estado `Locked` o `Finished`.
+        Protege la privacidad de los jugadores hasta que el partido comienza.
+      operationId: getMatchPredictions
+      tags: [predictions]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: match_id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: simulated_time
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Lista de predicciones de todos los usuarios
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FriendPrediction'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Partido aún abierto — predicciones no visibles
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+              example:
+                detail: Predictions are only visible after the match is locked.
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ── Bonus ─────────────────────────────────────────────────────────────────
+
+  /bonus-questions:
+    get:
+      summary: Listar preguntas bonus con predicción del usuario
+      operationId: listBonusQuestions
+      tags: [bonus]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Preguntas bonus con estado de bloqueo y predicción guardada
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BonusQuestionOut'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /bonus-predictions:
+    post:
+      summary: Crear o actualizar predicción bonus (upsert)
+      description: |
+        Se bloquea al inicio del partido inaugural del torneo (`TOURNAMENT_KICKOFF`).
+        Tipos válidos: `Champion` (20 pts) y `TopScorer` (15 pts).
+      operationId: upsertBonusPrediction
+      tags: [bonus]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BonusPredictionCreate'
+      responses:
+        '200':
+          description: Predicción bonus guardada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BonusPredictionOut'
+        '400':
+          description: Tipo de pregunta inválido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Bonus bloqueado (torneo iniciado)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+              example:
+                detail: Bonus predictions are locked.
+
+  # ── Admin ─────────────────────────────────────────────────────────────────
+
+  /admin/users:
+    get:
+      summary: Listar todos los usuarios
+      operationId: adminListUsers
+      tags: [admin]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          description: "Filtrar por estado: Pending | Active | Rejected"
+          schema:
+            type: string
+            enum: [Pending, Active, Rejected]
+      responses:
+        '200':
+          description: Lista de usuarios ordenada por `created_at DESC`
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AdminUserOut'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /admin/users/{user_id}/approve:
+    post:
+      summary: Aprobar usuario Pending → Active
+      operationId: approveUser
+      tags: [admin]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Usuario activado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminUserOut'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /admin/users/{user_id}/reject:
+    post:
+      summary: Rechazar usuario → Rejected
+      operationId: rejectUser
+      tags: [admin]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Usuario rechazado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminUserOut'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /admin/matches:
+    post:
+      summary: Crear partido
+      operationId: adminCreateMatch
+      tags: [admin]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MatchCreate'
+      responses:
+        '201':
+          description: Partido creado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchOut'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /admin/matches/{match_id}:
+    put:
+      summary: Actualizar datos del partido (fecha, equipos, sede)
+      operationId: adminUpdateMatch
+      tags: [admin]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: match_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MatchUpdate'
+      responses:
+        '200':
+          description: Partido actualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchOut'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /admin/matches/{match_id}/result:
+    post:
+      summary: Cargar resultado final (dispara recálculo de puntos)
+      description: |
+        Flujo sincrónico al recibir el resultado:
+        1. Actualiza `home_score_final`, `away_score_final` y `status=Finished` en el partido.
+        2. Calcula `points_earned` para cada predicción del partido.
+        3. Recalcula `total_points` y `exact_scores` de todos los usuarios afectados.
+      operationId: setMatchResult
+      tags: [admin]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: match_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MatchResult'
+      responses:
+        '200':
+          description: Resultado cargado y predicciones recalculadas
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      summary: Corregir resultado ya cargado (mismo efecto que POST)
+      operationId: correctMatchResult
+      tags: [admin]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: match_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MatchResult'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResultResponse'
+          description: Resultado corregido y puntos recalculados
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /admin/bonus-predictions/{user_id}/{question_type}/validate:
+    post:
+      summary: Validar predicción bonus y asignar puntos manualmente
+      operationId: validateBonus
+      tags: [admin]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: question_type
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [Champion, TopScorer]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BonusValidate'
+      responses:
+        '200':
+          description: Puntos asignados a la predicción bonus
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BonusPredictionOut'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+# ── Components ───────────────────────────────────────────────────────────────
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    Unauthorized:
+      description: Token ausente o inválido
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDetail'
+          example:
+            detail: Could not validate credentials
+    Forbidden:
+      description: El usuario no tiene permisos de administrador
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDetail'
+          example:
+            detail: Admin access required
+    NotFound:
+      description: Recurso no encontrado
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorDetail'
+
+  schemas:
+
+    ErrorDetail:
+      type: object
+      properties:
+        detail:
+          type: string
+      required: [detail]
+
+    # ── Auth schemas ──────────────────────────────────────────────────────────
+
+    UserRegister:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          example: gus
+        password:
+          type: string
+          format: password
+          example: secret123
+
+    UserLogin:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+
+    TokenResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        token_type:
+          type: string
+          default: bearer
+
+    UserCreated:
+      type: object
+      properties:
+        id:
+          type: integer
+        username:
+          type: string
+
+    # ── User schemas ──────────────────────────────────────────────────────────
+
+    UserMe:
+      type: object
+      properties:
+        id:
+          type: integer
+        username:
+          type: string
+        is_admin:
+          type: boolean
+        status:
+          type: string
+          enum: [Pending, Active, Rejected]
+        total_points:
+          type: integer
+        exact_scores:
+          type: integer
+        rank:
+          type: integer
+          nullable: true
+
+    RankingEntry:
+      type: object
+      properties:
+        rank:
+          type: integer
+        user_id:
+          type: integer
+        username:
+          type: string
+        total_points:
+          type: integer
+        exact_scores:
+          type: integer
+
+    AdminUserOut:
+      type: object
+      properties:
+        id:
+          type: integer
+        username:
+          type: string
+        status:
+          type: string
+          enum: [Pending, Active, Rejected]
+        total_points:
+          type: integer
+        exact_scores:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    # ── Match schemas ─────────────────────────────────────────────────────────
+
+    MatchOut:
+      type: object
+      properties:
+        id:
+          type: integer
+        home_team:
+          type: string
+          nullable: true
+          description: Nulo en fases eliminatorias hasta que se definan los equipos
+        away_team:
+          type: string
+          nullable: true
+        home_team_code:
+          type: string
+          nullable: true
+          description: "ISO 3166-1 alpha-2 para construir URL de bandera (flagcdn.com)"
+        away_team_code:
+          type: string
+          nullable: true
+        home_team_placeholder:
+          type: string
+          nullable: true
+          description: "Texto descriptivo cuando home_team es null, ej: '1° Grupo A'"
+        away_team_placeholder:
+          type: string
+          nullable: true
+        start_time:
+          type: string
+          format: date-time
+        phase:
+          type: string
+          enum: [Groups, R32, R16, QF, SF, ThirdPlace, Final]
+        group_name:
+          type: string
+          nullable: true
+          description: Solo aplica en phase=Groups (A–L)
+        matchday:
+          type: integer
+          nullable: true
+          description: Jornada dentro del grupo (1–3)
+        venue:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [Open, Locked, Finished, Pending Teams]
+          description: |
+            Estado calculado en runtime (no almacenado en DB):
+            - Open: más de 15 min antes del pitazo
+            - Locked: 15 min antes del pitazo hasta el final del partido
+            - Finished: resultado cargado por Admin
+            - Pending Teams: equipos eliminatorios aún no definidos
+        home_score_final:
+          type: integer
+          nullable: true
+        away_score_final:
+          type: integer
+          nullable: true
+        my_prediction:
+          $ref: '#/components/schemas/PredictionInMatch'
+          nullable: true
+
+    PredictionInMatch:
+      type: object
+      properties:
+        home_score_guess:
+          type: integer
+        away_score_guess:
+          type: integer
+        points_earned:
+          type: integer
+          nullable: true
+
+    MatchCreate:
+      type: object
+      required: [start_time, phase]
+      properties:
+        home_team:
+          type: string
+          nullable: true
+        away_team:
+          type: string
+          nullable: true
+        home_team_code:
+          type: string
+          nullable: true
+        away_team_code:
+          type: string
+          nullable: true
+        home_team_placeholder:
+          type: string
+          nullable: true
+        away_team_placeholder:
+          type: string
+          nullable: true
+        start_time:
+          type: string
+          format: date-time
+        phase:
+          type: string
+          enum: [Groups, R32, R16, QF, SF, ThirdPlace, Final]
+        group_name:
+          type: string
+          nullable: true
+        matchday:
+          type: integer
+          nullable: true
+        venue:
+          type: string
+          nullable: true
+
+    MatchUpdate:
+      type: object
+      description: Todos los campos son opcionales — se aplica un patch parcial
+      properties:
+        home_team:
+          type: string
+          nullable: true
+        away_team:
+          type: string
+          nullable: true
+        home_team_code:
+          type: string
+          nullable: true
+        away_team_code:
+          type: string
+          nullable: true
+        home_team_placeholder:
+          type: string
+          nullable: true
+        away_team_placeholder:
+          type: string
+          nullable: true
+        start_time:
+          type: string
+          format: date-time
+        venue:
+          type: string
+          nullable: true
+
+    MatchResult:
+      type: object
+      required: [home_score_final, away_score_final]
+      properties:
+        home_score_final:
+          type: integer
+          minimum: 0
+        away_score_final:
+          type: integer
+          minimum: 0
+
+    ResultResponse:
+      type: object
+      properties:
+        match_id:
+          type: integer
+        home_score_final:
+          type: integer
+        away_score_final:
+          type: integer
+        predictions_updated:
+          type: integer
+          description: Número de predicciones recalculadas
+
+    # ── Prediction schemas ────────────────────────────────────────────────────
+
+    PredictionCreate:
+      type: object
+      required: [match_id, home_score_guess, away_score_guess]
+      properties:
+        match_id:
+          type: integer
+        home_score_guess:
+          type: integer
+          minimum: 0
+        away_score_guess:
+          type: integer
+          minimum: 0
+        simulated_time:
+          type: string
+          format: date-time
+          nullable: true
+          description: Time Travel — ISO 8601 (requiere ENABLE_TIME_TRAVEL=True)
+
+    PredictionOut:
+      type: object
+      properties:
+        id:
+          type: integer
+        match_id:
+          type: integer
+        home_score_guess:
+          type: integer
+        away_score_guess:
+          type: integer
+        points_earned:
+          type: integer
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    FriendPrediction:
+      type: object
+      properties:
+        username:
+          type: string
+        home_score_guess:
+          type: integer
+        away_score_guess:
+          type: integer
+        points_earned:
+          type: integer
+          nullable: true
+
+    # ── Bonus schemas ─────────────────────────────────────────────────────────
+
+    BonusQuestionOut:
+      type: object
+      properties:
+        question_type:
+          type: string
+          enum: [Champion, TopScorer]
+        question_text:
+          type: string
+          example: ¿Quién será el Campeón del Mundial 2026?
+        points_reward:
+          type: integer
+          description: "Champion=20, TopScorer=15"
+        is_locked:
+          type: boolean
+          description: True a partir del pitazo inicial del torneo
+        my_prediction:
+          type: string
+          nullable: true
+          description: Texto libre ingresado por el usuario
+
+    BonusPredictionCreate:
+      type: object
+      required: [question_type, prediction_text]
+      properties:
+        question_type:
+          type: string
+          enum: [Champion, TopScorer]
+        prediction_text:
+          type: string
+          example: Argentina
+
+    BonusPredictionOut:
+      type: object
+      properties:
+        question_type:
+          type: string
+        prediction_text:
+          type: string
+        points_earned:
+          type: integer
+          nullable: true
+          description: Null hasta validación manual del Admin
+
+    BonusValidate:
+      type: object
+      required: [points_earned]
+      properties:
+        points_earned:
+          type: integer
+          minimum: 0

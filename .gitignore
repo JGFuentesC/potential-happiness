@@ -1,2 +1,37 @@
+# Secrets & environment
 .env
 .envrc
+
+# Python
+**/__pycache__/
+*.pyc
+*.pyo
+**/.venv/
+**/*.egg-info/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Frontend build & deps
+node_modules/
+dist/
+.vite/
+
+# Test output
+.pytest_cache/
+htmlcov/
+.coverage
+test-results/
+playwright-report/
+
+# Runtime
+.run/
+
+# Claude Code (project settings se commitean; local overrides no)
+.claude/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db

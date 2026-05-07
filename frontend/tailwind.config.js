@@ -1,0 +1,90 @@
+/** @type {import('tailwindcss').Config} */
+export default {
+  darkMode: ["class"],
+  content: ["./index.html", "./src/**/*.{ts,tsx}"],
+  theme: {
+    extend: {
+      colors: {
+        // shadcn CSS-variable tokens (required for shadcn components)
+        border: "hsl(var(--border))",
+        input: "hsl(var(--input))",
+        ring: "hsl(var(--ring))",
+        foreground: "hsl(var(--foreground))",
+        destructive: {
+          DEFAULT: "hsl(var(--destructive))",
+          foreground: "hsl(var(--foreground))",
+        },
+        muted: {
+          DEFAULT: "hsl(var(--muted))",
+          foreground: "hsl(var(--muted-foreground))",
+        },
+        accent: {
+          DEFAULT: "hsl(var(--accent))",
+          foreground: "hsl(var(--accent-foreground))",
+        },
+        card: {
+          DEFAULT: "hsl(var(--card))",
+          foreground: "hsl(var(--card-foreground))",
+        },
+        popover: {
+          DEFAULT: "hsl(var(--popover))",
+          foreground: "hsl(var(--popover-foreground))",
+        },
+        // Neon Tokyo palette — extraída de ui-inspo/matches_dashboard/code.html
+        background: "#0a0a12",
+        surface: "#0f0f1a",
+        "surface-dim": "#0f0f1a",
+        "surface-bright": "#1a1a2e",
+        "surface-variant": "#1e1e30",
+        "surface-container-lowest": "#0a0a12",
+        "surface-container-low": "#111118",
+        "surface-container": "#141422",
+        "surface-container-high": "#1e1e30",
+        "surface-container-highest": "#28283e",
+        "on-background": "#e8e0f0",
+        "on-surface": "#e8e0f0",
+        "on-surface-variant": "#a098b0",
+        outline: "#5a5068",
+        "outline-variant": "#302840",
+        primary: "#ff2d78",
+        "primary-container": "#b3004e",
+        "on-primary": "#1a0010",
+        "surface-tint": "#ff2d78",
+        secondary: "#00ffcc",
+        "secondary-container": "#004d3d",
+        "on-secondary": "#001a1a",
+        tertiary: "#ffe04a",
+        "on-tertiary": "#1a1000",
+        error: "#ff4444",
+        "error-container": "#3d0f0f",
+        "inverse-surface": "#e8e0f0",
+        "inverse-on-surface": "#0a0a12",
+        "inverse-primary": "#8c0038",
+      },
+      borderRadius: {
+        DEFAULT: "0.125rem",
+        sm: "0.125rem",
+        md: "0.25rem",
+        lg: "0.25rem",
+        xl: "0.5rem",
+        "2xl": "0.75rem",
+        full: "0.75rem",
+      },
+      fontFamily: {
+        headline: ["Sora", "sans-serif"],
+        display: ["Sora", "sans-serif"],
+        body: ["Inter", "sans-serif"],
+        label: ["Space Grotesk", "sans-serif"],
+        sans: ["Inter", "sans-serif"],
+      },
+      boxShadow: {
+        "neon-primary": "0 0 16px rgba(255, 45, 120, 0.4)",
+        "neon-secondary": "0 0 16px rgba(0, 255, 204, 0.4)",
+        "neon-purple": "0 0 16px rgba(123, 47, 251, 0.4)",
+        "inner-neon-primary": "inset 0 0 12px rgba(255, 45, 120, 0.1)",
+      },
+    },
+  },
+  plugins: [],
+};
+
