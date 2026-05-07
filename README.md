@@ -20,6 +20,41 @@ Los participantes predicen resultados, acumulan puntos y compiten en una tabla d
 
 ## Inicio rápido
 
+### Con Docker (sin dependencias locales)
+
+```bash
+# Build único (~2 min la primera vez, luego usa caché)
+docker build -t quiniela-e2e .
+
+# Levantar sistema completo
+docker run --rm -p 5173:5173 -p 8000:8000 quiniela-e2e
+```
+
+| Servicio | URL |
+|----------|-----|
+| App | http://localhost:5173 |
+| API | http://localhost:8000 |
+| Swagger UI | http://localhost:8000/docs |
+
+**Credenciales por defecto:** `admin` / `changeme-admin`
+
+Para sobrescribir variables en producción:
+
+```bash
+docker run --rm -p 5173:5173 -p 8000:8000 \
+  -e SECRET_KEY=tu-clave-secreta \
+  -e ADMIN_PASSWORD=tu-password-seguro \
+  quiniela-e2e
+```
+
+Para correr los tests E2E dentro del contenedor (requiere rebuild con Chromium — ver `Dockerfile`):
+
+```bash
+docker run --rm quiniela-e2e test
+```
+
+### Con ctl.sh (desarrollo local)
+
 ```bash
 # Levantar backend (puerto 8000) + frontend (puerto 5173)
 ./ctl.sh start

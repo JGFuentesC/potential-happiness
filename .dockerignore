@@ -1,0 +1,13 @@
+backend/.venv
+backend/__pycache__
+backend/quiniela.db
+backend/*.egg-info
+backend/.pytest_cache
+backend/.env
+frontend/node_modules
+frontend/dist
+frontend/test-results
+frontend/playwright-report
+.git
+.DS_Store
+docs/screenshots

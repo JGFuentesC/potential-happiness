@@ -9,8 +9,8 @@ const __dirname  = path.dirname(__filename);
 // ─────────────────────────────────────────────────────────────────────────────
 // Config
 // ─────────────────────────────────────────────────────────────────────────────
-const BASE = "http://127.0.0.1:5173";
-const API  = "http://127.0.0.1:8000";
+const BASE = process.env.BASE_URL || "http://127.0.0.1:5173";
+const API  = process.env.API_URL  || "http://127.0.0.1:8000";
 const ADMIN_USER = "admin";
 const ADMIN_PASS = "changeme-admin";
 const TEST_USER  = "playwright_user";
