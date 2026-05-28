@@ -1,37 +1,19 @@
-# Secrets & environment
-.env
+data/
 .envrc
-
-# Python
-**/__pycache__/
+.env
+.gcloud_config/
+# Virtual environments
+scripts/.venv/
+.venv/
+venv/
+__pycache__/
 *.pyc
 *.pyo
-**/.venv/
-**/*.egg-info/
-
-# Database
-*.db
-*.sqlite
-*.sqlite3
-
-# Frontend build & deps
-node_modules/
+*.pyd
+.Python
+*.so
+*.egg-link
+.installed.cfg
+develop-eggs/
 dist/
-.vite/
-
-# Test output
-.pytest_cache/
-htmlcov/
-.coverage
-test-results/
-playwright-report/
-
-# Runtime
-.run/
-
-# Claude Code (project settings se commitean; local overrides no)
-.claude/settings.local.json
-
-# OS
-.DS_Store
-Thumbs.db
+build/
