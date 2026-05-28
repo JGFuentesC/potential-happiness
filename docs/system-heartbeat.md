@@ -1,7 +1,7 @@
 # System Heartbeat — FakeStoreAPI Medallion Pipeline
 
 **Last Updated:** 2026-05-27
-**Status:** Initial scaffolding complete; data extraction ready
+**Status:** Silver and Gold layers complete; full pipeline operational
 
 ---
 
@@ -25,48 +25,20 @@ This project implements a medallion architecture pipeline:
 | Image downloader | `scripts/download_images.py` | Async download of 20 product images |
 | Documentation | `docs/medallion-architecture.md` | Architecture diagrams and design |
 | Sample data | `docs/docs-data.json` | JSON reference data |
+| **Bronze layer** | `fakestore_raw` dataset | 20 products, 7 carts, 10 users in BigQuery |
+| **Silver layer** | `fakestore_silver` dataset | 4 tables: products, users, carts, cart_summary |
+| **Gold layer** | `fakestore_gold` dataset | 3 tables: product_performance, user_behavior, category_insights |
+| **SQL scripts** | `sql/silver/`, `sql/gold/` | 7 SQL files for transformations |
+| **Makefile** | `Makefile` | `make silver`, `make gold`, `make verify`, `make clean` |
 
-### 🔴 Pending (Manual Execution Required)
+### 🔴 Pending (CI/CD Automation)
 
-All steps below require manual execution or CI/CD automation:
+All core transformations are implemented and tested. Remaining work focuses on automation:
 
-1. **Local extraction:**
-   ```bash
-   uv venv scripts/.venv
-   uv pip install --python scripts/.venv/bin/python aiohttp aiofiles
-   uv run --python scripts/.venv/bin/python scripts/extract_fakestore.py
-   ```
-
-2. **Download images:**
-   ```bash
-   uv run --python scripts/.venv/bin/python scripts/download_images.py
-   ```
-
-3. **GCS bucket creation:** (Check if `gs://fakestore-raw` exists)
-   ```bash
-   gcloud storage buckets create gs://fakestore-raw \
-     --location=us-east4 \
-     --uniform-bucket-level-access
-   ```
-
-4. **Upload to GCS:** (Requires gcloud auth)
-   ```bash
-   gcloud storage cp data/products/*.json gs://fakestore-raw/products/
-   # ... same for carts, users, images
-   ```
-
-5. **Create NDJSON files:**
-   ```bash
-   # Scripts produce individual JSON files; consolidate per AGENTS.md step 5
-   ```
-
-6. **BigQuery setup:**
-   ```bash
-   bq mk --dataset --location=us-east4 fakestore_raw
-   bq load --source_format=NEWLINE_DELIMITED_JSON --autodetect \
-     fakestore_raw.raw_products gs://fakestore-raw/products_all.ndjson
-   # ... same for carts, users
-   ```
+1. **Automate extraction:** Convert manual `uv run` commands into a `Makefile` target (already partially done)
+2. **Add data quality checks:** Validate row counts, nulls, schema consistency
+3. **Set up scheduling:** Use Cloud Scheduler or GitHub Actions to re-extract periodically
+4. **Add Looker Studio dashboards:** Connect to Gold tables for visualization
 
 ---
 
@@ -108,11 +80,10 @@ All steps below require manual execution or CI/CD automation:
 
 ## Next Agent Tasks
 
-1. **Automate extraction:** Convert manual `uv run` commands into a `Makefile` or `justfile`
-2. **Implement Silver layer:** Create BQ views/scripts that transform Bronze → Silver
-3. **Add data quality checks:** Validate row counts, nulls, schema consistency
-4. **Set up scheduling:** Use Cloud Scheduler or GitHub Actions to re-extract periodically
-5. **Implement Gold layer:** Create aggregation tables for analytics/reporting
+1. **Add data quality checks:** Validate row counts, nulls, schema consistency in Silver/Gold tables
+2. **Set up scheduling:** Use Cloud Scheduler or GitHub Actions to re-extract periodically
+3. **Add Looker Studio dashboards:** Connect to Gold tables for visualization
+4. **Implement incremental loads:** Add partitioning and clustering for cost optimization
 
 ---
 

@@ -19,6 +19,21 @@
 │   ├── .venv/                     # Virtual env (gitignored)
 │   ├── extract_fakestore.py       # Async extraction script
 │   └── download_images.py         # Async image downloader
+├── sql/
+│   ├── silver/                    # Bronze → Silver transformations
+│   │   ├── 01_silver_products.sql
+│   │   ├── 02_silver_users.sql
+│   │   ├── 03_silver_carts.sql
+│   │   └── 04_silver_cart_summary.sql
+│   └── gold/                      # Silver → Gold transformations
+│       ├── 01_gold_product_performance.sql
+│       ├── 02_gold_user_behavior.sql
+│       └── 03_gold_category_insights.sql
+├── docs/
+│   ├── medallion-architecture.md  # Architecture design
+│   └── system-heartbeat.md        # Project status
+├── .env                           # BQ configuration variables
+├── Makefile                       # Pipeline automation
 ├── AGENTS.md
 └── .gitignore
 ```
@@ -138,6 +153,45 @@ bq query --nouse_legacy_sql "
 "
 ```
 
+### 9. Run Silver layer transformations
+
+```bash
+make silver
+```
+
+Creates 4 tables in `fakestore_silver` dataset:
+- `silver_products` (20 rows) — cleaned products with extracted rating fields
+- `silver_users` (10 rows) — users with redacted passwords, flattened address/name
+- `silver_carts` (14 rows) — unnested cart items (1 row per product-in-cart)
+- `silver_cart_summary` (7 rows) — denormalized cart view with totals
+
+### 10. Run Gold layer transformations
+
+```bash
+make gold
+```
+
+Creates 3 tables in `fakestore_gold` dataset:
+- `gold_product_performance` (20 rows) — product ranking by revenue/units/buyers
+- `gold_user_behavior` (10 rows) — user segmentation by spending/frequency
+- `gold_category_insights` (4 rows) — category-level pricing and demand summary
+
+### 11. Verify pipeline
+
+```bash
+make verify
+```
+
+Shows row counts across all layers (Bronze → Silver → Gold).
+
+### 12. Clean Silver/Gold tables (keep Bronze)
+
+```bash
+make clean
+```
+
+Drops all Silver and Gold tables for re-run.
+
 ## Tables: schema & row counts
 
 | Table | Rows | Notes |
@@ -145,6 +199,13 @@ bq query --nouse_legacy_sql "
 | `raw_products` | 20 | Includes nested `rating { rate, count }` |
 | `raw_carts` | 7 | Includes `date`, `__v`, and repeated `products { productId, quantity }` |
 | `raw_users` | 10 | Includes nested `name { firstname, lastname }`, `address { street, city, zipcode, number, geolocation { lat, long } }`, `phone`, `__v` |
+| `silver_products` | 20 | Cleaned products with extracted rating fields |
+| `silver_users` | 10 | Users with redacted passwords, flattened address/name |
+| `silver_carts` | 14 | Unnested cart items (1 row per product-in-cart) |
+| `silver_cart_summary` | 7 | Denormalized cart view with totals |
+| `gold_product_performance` | 20 | Product ranking by revenue/units/buyers |
+| `gold_user_behavior` | 10 | User segmentation by spending/frequency |
+| `gold_category_insights` | 4 | Category-level pricing and demand summary |
 
 ## GCS Bucket layout
 
@@ -165,8 +226,19 @@ gs://fakestore-raw/
 |-----------|-------|
 | API Base URL | `https://fakestoreapi.com` |
 | GCS Bucket | `gs://fakestore-raw` |
-| BQ Dataset | `fakestore_raw` |
+| BQ Datasets | `fakestore_raw`, `fakestore_silver`, `fakestore_gold` |
 | GCP Region | `us-east4` |
+
+## Makefile Commands
+
+| Command | Description |
+|---------|-------------|
+| `make datasets` | Create Silver and Gold datasets |
+| `make silver` | Run all Silver transformations |
+| `make gold` | Run Silver + Gold transformations |
+| `make all` | Full pipeline + verify |
+| `make verify` | Show row counts across all layers |
+| `make clean` | Drop Silver and Gold tables |
 
 > **Note:** All GCP commands assume your active `gcloud` project is correctly set.
 > No secrets, API keys, or project IDs are hardcoded — configure via `gcloud config`.

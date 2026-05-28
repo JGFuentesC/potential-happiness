@@ -1,209 +1,104 @@
-# Quiniela Mundial 2026
+# FakeStoreAPI — Medallion Data Pipeline
 
-Aplicación de pronósticos para el Mundial de Fútbol Norteamérica 2026.
-Los participantes predicen resultados, acumulan puntos y compiten en una tabla de posiciones en tiempo real.
+A medallion architecture data pipeline that extracts e-commerce data from [FakeStoreAPI](https://fakestoreapi.com), ingests it into Google Cloud Storage and BigQuery, and transforms it through Bronze → Silver → Gold layers for analytics.
 
----
+## Architecture
 
-## Stack
+```
+FakeStoreAPI ──> GCS (Bronze) ──> BigQuery (Silver) ──> BigQuery (Gold)
+```
 
-| Capa | Tecnología |
-|------|-----------|
-| Backend | Python 3.10+ · FastAPI · SQLAlchemy · SQLite |
-| Autenticación | JWT (python-jose) · bcrypt |
-| Frontend | TypeScript · React 18 · Vite · shadcn/ui · Tailwind CSS |
-| Estado cliente | Zustand (persist) |
-| Tests backend | pytest (95 tests) |
-| Tests E2E | Playwright (11 tests) |
+| Layer | Dataset | Description |
+|-------|---------|-------------|
+| Bronze | `fakestore_raw` | Raw JSON from API, as-is |
+| Silver | `fakestore_silver` | Cleaned, typed, unnested, PII-redacted |
+| Gold | `fakestore_gold` | Business aggregates for dashboards |
 
----
+## Quick Start
 
-## Inicio rápido
+### Prerequisites
 
-### Con Docker (sin dependencias locales)
+- **Python 3.12+** with [uv](https://docs.astral.sh/uv/)
+- **gcloud CLI** authenticated (`gcloud auth login`)
+- **BigQuery API** enabled in your GCP project
+
+### Setup
 
 ```bash
-# Build único (~2 min la primera vez, luego usa caché)
-docker build -t quiniela-e2e .
+# 1. Configure your project
+cp .env.example .env
+# Edit .env with your GCP project ID
 
-# Levantar sistema completo
-docker run --rm -p 5173:5173 -p 8000:8000 quiniela-e2e
+# 2. Install dependencies
+uv venv scripts/.venv
+uv pip install --python scripts/.venv/bin/python aiohttp aiofiles
+
+# 3. Extract data from API
+uv run --python scripts/.venv/bin/python scripts/extract_fakestore.py
+uv run --python scripts/.venv/bin/python scripts/download_images.py
+
+# 4. Upload to GCS and load into BigQuery (see AGENTS.md for full steps)
+
+# 5. Run transformations
+make silver   # Bronze → Silver
+make gold     # Silver → Gold
+make verify   # Check row counts
 ```
 
-| Servicio | URL |
-|----------|-----|
-| App | http://localhost:5173 |
-| API | http://localhost:8000 |
-| Swagger UI | http://localhost:8000/docs |
-
-**Credenciales por defecto:** `admin` / `changeme-admin`
-
-Para sobrescribir variables en producción:
-
-```bash
-docker run --rm -p 5173:5173 -p 8000:8000 \
-  -e SECRET_KEY=tu-clave-secreta \
-  -e ADMIN_PASSWORD=tu-password-seguro \
-  quiniela-e2e
-```
-
-Para correr los tests E2E dentro del contenedor (requiere rebuild con Chromium — ver `Dockerfile`):
-
-```bash
-docker run --rm quiniela-e2e test
-```
-
-### Con ctl.sh (desarrollo local)
-
-```bash
-# Levantar backend (puerto 8000) + frontend (puerto 5173)
-./ctl.sh start
-
-# Ver estado
-./ctl.sh status
-
-# Detener todo
-./ctl.sh stop
-```
-
-| Servicio | URL |
-|----------|-----|
-| App | http://localhost:5173 |
-| API | http://localhost:8000 |
-| Swagger UI | http://localhost:8000/docs |
-
----
-
-## Configuración
-
-Copiar y completar las variables de entorno del backend:
-
-```bash
-cp backend/.env.example backend/.env
-```
-
-| Variable | Descripción | Default |
-|----------|-------------|---------|
-| `SECRET_KEY` | Clave secreta para firmar JWT | — |
-| `ALGORITHM` | Algoritmo JWT | `HS256` |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | Expiración del token | `10080` (7 días) |
-| `DATABASE_URL` | Ruta de la base de datos SQLite | `sqlite:///./quiniela.db` |
-| `ENABLE_TIME_TRAVEL` | Habilitar simulación temporal para E2E | `False` |
-| `TOURNAMENT_KICKOFF` | Datetime del partido inaugural (ISO 8601) | `2026-06-11T20:00:00` |
-| `ADMIN_USERNAME` | Username del admin inicial | — |
-| `ADMIN_PASSWORD` | Password del admin inicial | — |
-
-### Seed inicial
-
-```bash
-cd backend
-source .venv/bin/activate
-python seed_matches.py   # Carga los 72 partidos de la fase de grupos
-python seed_admin.py     # Crea el usuario admin desde ADMIN_USERNAME/ADMIN_PASSWORD
-```
-
----
-
-## Documentación
-
-| Documento | Descripción |
-|-----------|-------------|
-| [docs/api/openapi.yaml](docs/api/openapi.yaml) | Especificación OpenAPI 3.0 completa |
-| [docs/architecture/diagrams.md](docs/architecture/diagrams.md) | Diagramas de arquitectura, flujos y estados (Mermaid) |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Arquitectura detallada, esquema de DB y contratos de API |
-| [docs/DESIGN.md](docs/DESIGN.md) | Sistema de diseño visual (paleta Neon Tokyo, tipografía) |
-| [docs/PRD.md](docs/PRD.md) | Product Requirements Document |
-| [docs/plan.md](docs/plan.md) | Plan de implementación por fases |
-| [docs/system-heartbeat.md](docs/system-heartbeat.md) | Estado actual del proyecto y decisiones técnicas |
-| [docs/test-evidence.md](docs/test-evidence.md) | Evidencia de QA (pytest + Playwright) |
-| [docs/er-diagram.mmd](docs/er-diagram.mmd) | Diagrama entidad-relación de la base de datos |
-
----
-
-## Reglas de Negocio
-
-### Puntuación
-
-| Resultado | Puntos |
-|-----------|--------|
-| Tendencia correcta (1X2) | +3 |
-| Bono marcador exacto | +2 |
-| **Total máximo por partido** | **5** |
-
-El desempate en el ranking se resuelve por: `total_points DESC → exact_scores DESC → username ASC`.
-
-### Bloqueo de predicciones
-
-Las predicciones se cierran **15 minutos antes** del `start_time` del partido.
-El estado `Locked` se calcula en runtime — no se persiste en la base de datos.
-
-### Privacidad
-
-Las predicciones de otros jugadores solo son visibles cuando el partido está en estado `Locked` o `Finished`.
-
-### Bonus
-
-Dos preguntas con respuesta de texto libre:
-- **Campeón del Mundial** → 20 puntos (validación manual por Admin)
-- **Bota de Oro** → 15 puntos (validación manual por Admin)
-
-Se bloquean al inicio del partido inaugural (`TOURNAMENT_KICKOFF`).
-
-### Flujo de usuarios
+## Project Structure
 
 ```
-Registro → Pending → (Admin aprueba) → Active
-                   → (Admin rechaza) → Rejected
+.
+├── data/                          # Raw data (gitignored)
+├── scripts/
+│   ├── extract_fakestore.py       # Async API extraction
+│   └── download_images.py         # Async image downloader
+├── sql/
+│   ├── silver/                    # Bronze → Silver SQL
+│   └── gold/                      # Silver → Gold SQL
+├── docs/
+│   ├── medallion-architecture.md  # Architecture design
+│   └── system-heartbeat.md        # Project status
+├── .env.example                   # BQ config template
+├── Makefile                       # Pipeline automation
+└── AGENTS.md                      # Step-by-step playbook
 ```
 
-Los usuarios `Pending` no pueden iniciar sesión.
+## Makefile Commands
 
----
+| Command | Description |
+|---------|-------------|
+| `make datasets` | Create Silver and Gold BQ datasets |
+| `make silver` | Run all Silver transformations |
+| `make gold` | Run Silver + Gold transformations |
+| `make all` | Full pipeline + verify |
+| `make verify` | Show row counts across all layers |
+| `make clean` | Drop Silver and Gold tables |
 
-## Desarrollo
+## Tables
 
-### Backend
+| Table | Rows | Description |
+|-------|------|-------------|
+| `raw_products` | 20 | Raw products with nested rating |
+| `raw_carts` | 7 | Raw carts with product arrays |
+| `raw_users` | 10 | Raw users with nested address/name |
+| `silver_products` | 20 | Cleaned products, extracted ratings |
+| `silver_users` | 10 | Users with redacted passwords |
+| `silver_carts` | 14 | Unnested cart items |
+| `silver_cart_summary` | 7 | Denormalized cart view |
+| `gold_product_performance` | 20 | Product ranking by revenue |
+| `gold_user_behavior` | 10 | User segmentation |
+| `gold_category_insights` | 4 | Category-level analytics |
 
-```bash
-cd backend
-uv venv .venv && uv pip install -e ".[dev]"
-source .venv/bin/activate
-uvicorn app.main:app --reload --port 8000
+## Security
 
-# Tests
-pytest -v
+- No secrets, API keys, or project IDs are hardcoded
+- Credentials managed via `gcloud auth`
+- User passwords are redacted in Silver layer
+- Sensitive files (`.env`, `.gcloud_config/`, `data/`) are gitignored
 
-# Linting
-flake8 app/ && black app/
-```
+## Documentation
 
-### Frontend
-
-```bash
-cd frontend
-npm install
-npm run dev      # Desarrollo (HMR)
-npm run build    # Build de producción
-npm run lint     # ESLint + TypeScript check
-```
-
-### Tests E2E (Playwright)
-
-Requiere backend + frontend corriendo:
-
-```bash
-# Desde /frontend
-npx playwright test
-
-# O desde la raíz con ctl.sh
-./qa.sh
-```
-
----
-
-## Estado del proyecto
-
-Ver [docs/system-heartbeat.md](docs/system-heartbeat.md) para el estado actualizado de cada fase y las decisiones técnicas tomadas.
-
-**Suite pytest:** 95/95 tests pasando
-**Suite Playwright E2E:** 11/11 tests pasando
+- [AGENTS.md](AGENTS.md) — Full step-by-step playbook
+- [docs/medallion-architecture.md](docs/medallion-architecture.md) — Architecture design
+- [docs/system-heartbeat.md](docs/system-heartbeat.md) — Current project status
