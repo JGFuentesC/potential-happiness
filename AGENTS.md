@@ -15,20 +15,34 @@
 │   ├── carts/{id}.json
 │   ├── users/{id}.json
 │   └── images/{filename}.png
+├── models/                        # ONNX models local (gitignored)
+├── .venv/                         # Virtual env (gitignored)
+├── notebooks/
+│   └── vector_search_visualization.ipynb
 ├── scripts/
-│   ├── .venv/                     # Virtual env (gitignored)
 │   ├── extract_fakestore.py       # Async extraction script
-│   └── download_images.py         # Async image downloader
+│   ├── download_images.py         # Async image downloader
+│   ├── download_onnx_model.py         # Download & upload ONNX model to GCS
+│   ├── download_mobilenet_model.py    # Download & upload MobileNetV2 to GCS
+│   ├── generate_embeddings.py         # Generate text embeddings locally
+│   ├── generate_image_embeddings.py   # Generate image embeddings locally (CLIP)
+│   └── setup_notebook_kernel.py       # Register .venv as Jupyter kernel
 ├── sql/
 │   ├── silver/                    # Bronze → Silver transformations
 │   │   ├── 01_silver_products.sql
 │   │   ├── 02_silver_users.sql
 │   │   ├── 03_silver_carts.sql
 │   │   └── 04_silver_cart_summary.sql
-│   └── gold/                      # Silver → Gold transformations
-│       ├── 01_gold_product_performance.sql
-│       ├── 02_gold_user_behavior.sql
-│       └── 03_gold_category_insights.sql
+│   ├── gold/                      # Silver → Gold transformations
+│   │   ├── 01_gold_product_performance.sql
+│   │   ├── 02_gold_user_behavior.sql
+│   │   └── 03_gold_category_insights.sql
+│   └── vector/                    # Gold → Vector transformations
+│       ├── 01_create_dataset.sql
+│       ├── 02_import_onnx_model.sql
+│       ├── 03_generate_embeddings.sql
+│       ├── 04_create_vector_index.sql
+│       └── 05_vector_search_examples.sql
 ├── docs/
 │   ├── medallion-architecture.md  # Architecture design
 │   └── system-heartbeat.md        # Project status
@@ -43,14 +57,14 @@
 ### 1. Create virtual environment
 
 ```bash
-uv venv scripts/.venv
-uv pip install --python scripts/.venv/bin/python aiohttp aiofiles
+uv venv .venv
+uv pip install --python .venv/bin/python aiohttp aiofiles google-cloud-storage Pillow sentence-transformers
 ```
 
 ### 2. Extract data from API
 
 ```bash
-uv run --python scripts/.venv/bin/python scripts/extract_fakestore.py
+uv run --python .venv/bin/python scripts/extract_fakestore.py
 ```
 
 Extracts **20 products**, **7 carts**, and **10 users** from `https://fakestoreapi.com`,
@@ -59,7 +73,7 @@ saving one JSON file per record under `data/{resource}/{id}.json`.
 ### 3. Download product images
 
 ```bash
-uv run --python scripts/.venv/bin/python scripts/download_images.py
+uv run --python .venv/bin/python scripts/download_images.py
 ```
 
 Downloads **20 PNG images** from product URLs to `data/images/`.
@@ -176,7 +190,30 @@ Creates 3 tables in `fakestore_gold` dataset:
 - `gold_user_behavior` (10 rows) — user segmentation by spending/frequency
 - `gold_category_insights` (4 rows) — category-level pricing and demand summary
 
-### 11. Verify pipeline
+### 11. Setup Vector layer (embeddings)
+
+```bash
+make setup-venv        # Create venv with all dependencies
+make download-model    # Download ONNX model and upload to GCS
+make vector            # Run vector pipeline
+```
+
+Creates `fakestore_vector` dataset with:
+- `text_embedding_model` — ONNX model (all-MiniLM-L6-v2, 384 dimensions)
+- `vector_products` — product embeddings for similarity search
+
+> **Note:** The ONNX model runs locally in BigQuery (no Vertex AI cost).
+
+### 12. Visualize embeddings
+
+```bash
+make notebook
+```
+
+Opens Jupyter notebook with PCA visualization of embedding space.
+Select kernel `Python (fakestore .venv)` in Jupyter.
+
+### 13. Verify pipeline
 
 ```bash
 make verify
@@ -184,7 +221,7 @@ make verify
 
 Shows row counts across all layers (Bronze → Silver → Gold).
 
-### 12. Clean Silver/Gold tables (keep Bronze)
+### 14. Clean Silver/Gold tables (keep Bronze)
 
 ```bash
 make clean
@@ -206,6 +243,8 @@ Drops all Silver and Gold tables for re-run.
 | `gold_product_performance` | 20 | Product ranking by revenue/units/buyers |
 | `gold_user_behavior` | 10 | User segmentation by spending/frequency |
 | `gold_category_insights` | 4 | Category-level pricing and demand summary |
+| `text_embedding_model` | — | ONNX model (all-MiniLM-L6-v2) |
+| `vector_products` | 20 | Product embeddings (384 dimensions) |
 
 ## GCS Bucket layout
 
@@ -217,7 +256,9 @@ gs://fakestore-raw/
 ├── images/{filename}.png     # 20 files
 ├── products_all.ndjson       # consolidated for BQ
 ├── carts_all.ndjson
-└── users_all.ndjson
+├── users_all.ndjson
+└── models/
+    └── all-MiniLM-L6-v2.onnx  # ONNX embedding model
 ```
 
 ## Configuration parameters
@@ -226,19 +267,26 @@ gs://fakestore-raw/
 |-----------|-------|
 | API Base URL | `https://fakestoreapi.com` |
 | GCS Bucket | `gs://fakestore-raw` |
-| BQ Datasets | `fakestore_raw`, `fakestore_silver`, `fakestore_gold` |
+| BQ Datasets | `fakestore_raw`, `fakestore_silver`, `fakestore_gold`, `fakestore_vector` |
 | GCP Region | `us-east4` |
+| ONNX Model | `all-MiniLM-L6-v2` (384 dimensions) |
 
 ## Makefile Commands
 
 | Command | Description |
 |---------|-------------|
+| `make setup-venv` | Create venv with all dependencies + register Jupyter kernel |
+| `make download-model` | Download ONNX model from HuggingFace and upload to GCS |
 | `make datasets` | Create Silver and Gold datasets |
 | `make silver` | Run all Silver transformations |
 | `make gold` | Run Silver + Gold transformations |
 | `make all` | Full pipeline + verify |
+| `make vector` | Create Vector dataset + import model + generate embeddings |
+| `make vector-verify` | Show vector layer stats |
 | `make verify` | Show row counts across all layers |
 | `make clean` | Drop Silver and Gold tables |
+| `make vector-clean` | Drop Vector tables |
+| `make notebook` | Open Jupyter notebook with .venv |
 
 > **Note:** All GCP commands assume your active `gcloud` project is correctly set.
 > No secrets, API keys, or project IDs are hardcoded — configure via `gcloud config`.

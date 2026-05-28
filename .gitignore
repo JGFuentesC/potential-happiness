@@ -1,9 +1,9 @@
 data/
+models/
 .envrc
 .env
 .gcloud_config/
 # Virtual environments
-scripts/.venv/
 .venv/
 venv/
 __pycache__/
